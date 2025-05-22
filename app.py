@@ -1,3 +1,12 @@
+import os
+os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
+os.environ["STREAMLIT_SERVER_ENABLE_STATIC_FILE_WATCHER"] = "false"
+
+# Add these 3 lines for async compatibility
+import asyncio
+import nest_asyncio
+nest_asyncio.apply()
+
 import streamlit as st
 import cv2
 import numpy as np
@@ -12,7 +21,7 @@ import pandas as pd
 import torch
 
 # Set page configuration as the first Streamlit command
-st.set_page_config(page_title="Advanced Object & Edge Detection App", layout="wide")
+st.set_page_config(page_title="Objectify-Smart Object & Edge Detection App", layout="wide")
 
 # ======================
 # CONFIGURATION
@@ -166,7 +175,7 @@ def generate_heatmap(edges: np.ndarray) -> np.ndarray:
 # STREAMLIT UI
 # ======================
 def main():
-    st.title("Advanced Object & Edge Detection with OpenCV and YOLO")
+    st.title("Objectify-Smart object and edge detection application")
     st.markdown("Upload an image to apply edge detection and object detection with customizable settings.")
 
     # Model loading with error handling
