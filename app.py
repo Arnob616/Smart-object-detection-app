@@ -2,23 +2,32 @@ import os
 os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 os.environ["STREAMLIT_SERVER_ENABLE_STATIC_FILE_WATCHER"] = "false"
 
-# Add these 3 lines for async compatibility
+# Async fix must come FIRST before any imports
 import asyncio
 import nest_asyncio
 nest_asyncio.apply()
 
+# Torch path workaround BEFORE torch import
+import torch
+try:
+    # Prevent Streamlit from inspecting torch.classes
+    torch.classes.__path__._path = []  # type: ignore 
+except AttributeError:
+    pass
+
+# Now import other packages
 import streamlit as st
 import cv2
 import numpy as np
 import json
 import io
-import os
 import shutil
 import warnings
 from PIL import Image
 from ultralytics import YOLO
 import pandas as pd
-import torch
+
+# Rest of your code...
 
 # Set page configuration as the first Streamlit command
 st.set_page_config(page_title="Objectify-Smart Object & Edge Detection App", layout="wide")
