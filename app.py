@@ -23,6 +23,7 @@ import json
 import io
 import shutil
 import warnings
+import time
 from PIL import Image
 from ultralytics import YOLO
 import pandas as pd
@@ -38,30 +39,52 @@ st.set_page_config(page_title="Objectify-Smart Object & Edge Detection App", lay
 MODEL_PATH = "yolov8n.pt"
 CACHE_DIR = os.path.expanduser("~/.cache/ultralytics")
 MAX_IMAGE_SIZE = 800
-EDGE_METHODS = ["Canny", "Sobel", "Laplacian"]  # Removed Prewitt
+EDGE_METHODS = ["Canny", "Sobel", "Laplacian"]  # Removed Scharr
 DEFAULT_CLASSES_TO_SHOW = 3
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# Custom CSS for full black theme with white text
-st.markdown(
-    """
-    <style>
-    .main {background-color: #000000; padding: 20px;}
-    .stImage > img {max-width: 100%; height: auto; border: 1px solid #ffffff; border-radius: 5px;}
-    .stSidebar {background-color: #000000;}
-    .stExpander {background-color: #000000; border: 1px solid #ffffff; border-radius: 5px;}
-    h1, h2, h3, p, div, label, span {color: #ffffff !important;}
-    .stButton>button {background-color: #333333; color: #ffffff; border-radius: 5px; border: none;}
-    .stButton>button:hover {background-color: #555555;}
-    .stDataFrame {background-color: #000000; border: 1px solid #ffffff; border-radius: 5px;}
-    .stSelectbox > div, .stMultiSelect > div, .stCheckbox > label, .stSlider > label {color: #ffffff !important;}
-    .stDataFrame table, .stDataFrame th, .stDataFrame td {color: #ffffff !important; border-color: #ffffff;}
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+# ======================
+# CUSTOM CSS
+# ======================
+def apply_theme(high_contrast):
+    if high_contrast:
+        st.markdown(
+            """
+            <style>
+            .main {background-color: #FFFFFF; padding: 20px;}
+            .stImage > img {max-width: 100%; height: auto; border: 2px solid #000000; border-radius: 5px;}
+            .stSidebar {background-color: #FFFFFF; border-right: 2px solid #000000;}
+            .stExpander {background-color: #FFFFFF; border: 2px solid #000000; border-radius: 5px;}
+            h1, h2, h3, p, div, label, span {color: #000000 !important;}
+            .stButton>button {background-color: #000000; color: #FFFFFF; border-radius: 5px; border: 2px solid #000000;}
+            .stButton>button:hover {background-color: #333333;}
+            .stDataFrame {background-color: #FFFFFF; border: 2px solid #000000; border-radius: 5px;}
+            .stSelectbox > div, .stMultiSelect > div, .stCheckbox > label, .stSlider > label {color: #000000 !important;}
+            .stDataFrame table, .stDataFrame th, .stDataFrame td {color: #000000 !important; border-color: #000000;}
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            """
+            <style>
+            .main {background-color: #000000; padding: 20px;}
+            .stImage > img {max-width: 100%; height: auto; border: 1px solid #ffffff; border-radius: 5px;}
+            .stSidebar {background-color: #000000;}
+            .stExpander {background-color: #000000; border: 1px solid #ffffff; border-radius: 5px;}
+            h1, h2, h3, p, div, label, span {color: #ffffff !important;}
+            .stButton>button {background-color: #333333; color: #ffffff; border-radius: 5px; border: none;}
+            .stButton>button:hover {background-color: #555555;}
+            .stDataFrame {background-color: #000000; border: 1px solid #ffffff; border-radius: 5px;}
+            .stSelectbox > div, .stMultiSelect > div, .stCheckbox > label, .stSlider > label {color: #ffffff !important;}
+            .stDataFrame table, .stDataFrame th, .stDataFrame td {color: #ffffff !important; border-color: #ffffff;}
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
 
 # ======================
 # HELPER FUNCTIONS
@@ -80,6 +103,19 @@ def load_yolo_model():
         return YOLO(MODEL_PATH)
     except Exception as e:
         raise RuntimeError(f"Model loading failed: {str(e)}. Ensure internet connection and update ultralytics/torch.")
+
+def adjust_image_properties(image, brightness=100, contrast=100, saturation=100):
+    """Adjust image brightness, contrast, and saturation"""
+    img = np.array(image)
+    if brightness != 100:
+        img = cv2.convertScaleAbs(img, alpha=brightness/100)
+    if contrast != 100:
+        img = cv2.convertScaleAbs(img, alpha=contrast/100, beta=0)
+    if saturation != 100 and len(img.shape) == 3:
+        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+        hsv[..., 1] = np.clip(hsv[..., 1] * (saturation/100), 0, 255)
+        img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    return Image.fromarray(img)
 
 def preprocess_image(image: Image.Image) -> tuple:
     """Process uploaded image and return grayscale and RGB versions"""
@@ -133,6 +169,10 @@ def apply_edge_detection(method: str, image: np.ndarray, params: dict) -> np.nda
             edges = cv2.magnitude(sobelx, sobely)
         elif method == "Laplacian":
             edges = cv2.Laplacian(image, cv2.CV_64F, ksize=params['laplacian_kernel'])
+        elif method == "Scharr":
+            scharrx = cv2.Scharr(image, cv2.CV_64F, 1, 0)
+            scharry = cv2.Scharr(image, cv2.CV_64F, 0, 1)
+            edges = cv2.magnitude(scharrx, scharry)
             
         return cv2.normalize(edges, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     except Exception as e:
@@ -141,6 +181,7 @@ def apply_edge_detection(method: str, image: np.ndarray, params: dict) -> np.nda
 def detect_objects(model, image: np.ndarray, selected_classes: list) -> tuple:
     """Run YOLO object detection and return results with visualization"""
     try:
+        start_time = time.time()
         results = model(image)
         detections = []
         counts = {}
@@ -169,7 +210,7 @@ def detect_objects(model, image: np.ndarray, selected_classes: list) -> tuple:
                 })
                 counts[class_name] = counts.get(class_name, 0) + 1
                 
-        return viz_image, detections, counts
+        return viz_image, detections, counts, time.time()-start_time
     except Exception as e:
         raise RuntimeError(f"Object detection failed: {str(e)}")
 
@@ -185,8 +226,11 @@ def generate_heatmap(edges: np.ndarray) -> np.ndarray:
 # ======================
 def main():
     st.title("Objectify-Smart object and edge detection application")
-    st.markdown("Upload an image to apply edge detection and object detection with customizable settings.")
-
+    
+    # High Contrast Mode Toggle
+    high_contrast = st.sidebar.checkbox("High Contrast Mode", value=False)
+    apply_theme(high_contrast)
+    
     # Model loading with error handling
     try:
         model = load_yolo_model()
@@ -199,17 +243,37 @@ def main():
                     4. Manually download yolov8n.pt from https://github.com/ultralytics/assets/releases and place it in the project directory""")
         st.stop()
 
-    # File upload section
+    # Input Selection
+    input_method = st.sidebar.radio("Input Method", ["File Upload", "Webcam Capture"])
+    
+    # File upload/webcam capture section
     with st.container():
-        st.subheader("Image Upload")
-        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"], key="uploader")
-        if not uploaded_file:
-            st.markdown("*Built by Arnob Bokshi. Upload an image to begin processing.*")
+        st.subheader("Image Input")
+        img = None
+        
+        if input_method == "File Upload":
+            uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"], key="uploader")
+            if uploaded_file:
+                img = Image.open(uploaded_file)
+        else:
+            webcam_img = st.camera_input("Take a picture...")
+            if webcam_img:
+                img = Image.open(webcam_img)
+
+        if not img:
+            st.markdown("*Built by Arnob Bokshi. Upload an image or use webcam to begin processing.*")
             return
+
+    # Image Adjustments
+    with st.sidebar.expander("Image Adjustments", expanded=True):
+        brightness = st.slider("Brightness", 0, 200, 100)
+        contrast = st.slider("Contrast", 0, 200, 100)
+        saturation = st.slider("Saturation", 0, 200, 100)
+        adjusted_img = adjust_image_properties(img, brightness, contrast, saturation)
 
     # Image preprocessing
     try:
-        img_gray, img_rgb = preprocess_image(Image.open(uploaded_file))
+        img_gray, img_rgb = preprocess_image(adjusted_img)
     except Exception as e:
         st.error(f"Image processing error: {str(e)}")
         st.stop()
@@ -230,7 +294,7 @@ def main():
                 edge_params['threshold2'] = st.slider("Canny Threshold 2", 0, 500, 200, key="canny_t2")
             elif edge_method == "Sobel":
                 edge_params['kernel_size'] = st.slider("Kernel Size", 3, 15, 3, step=2, key="kernel_size")
-            else:  # Laplacian
+            elif edge_method == "Laplacian":
                 edge_params['laplacian_kernel'] = st.slider("Laplacian Kernel", 3, 15, 3, step=2, key="laplacian_kernel")
 
         # Preprocessing options
@@ -259,10 +323,15 @@ def main():
     # ======================
     try:
         # Apply preprocessing
+        start_preprocess = time.time()
         processed_img = apply_preprocessing(img_gray, preprocess_params)
+        preprocess_time = time.time() - start_preprocess
 
         # Edge detection
+        start_edge = time.time()
         edges = apply_edge_detection(edge_method, processed_img, edge_params)
+        edge_time = time.time() - start_edge
+        
         contour_img = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
         if draw_contours:
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -272,11 +341,14 @@ def main():
         yolo_image = img_rgb.copy()
         detections = []
         counts = {}
+        yolo_time = 0
         if yolo_enabled:
-            yolo_image, detections, counts = detect_objects(model, img_rgb, selected_classes)
+            yolo_image, detections, counts, yolo_time = detect_objects(model, img_rgb, selected_classes)
 
         # Generate heatmap
+        start_heatmap = time.time()
         heatmap = generate_heatmap(edges)
+        heatmap_time = time.time() - start_heatmap
 
     except Exception as e:
         st.error(f"Processing error: {str(e)}")
@@ -287,10 +359,21 @@ def main():
     # ======================
     with st.container():
         st.subheader("Processing Results")
+        
+        # Performance Metrics
+        with st.expander("Performance Metrics", expanded=True):
+            metrics = {
+                "Preprocessing": f"{preprocess_time*1000:.2f} ms",
+                "Edge Detection": f"{edge_time*1000:.2f} ms",
+                "Object Detection": f"{yolo_time*1000:.2f} ms" if yolo_enabled else "N/A",
+                "Heatmap Generation": f"{heatmap_time*1000:.2f} ms"
+            }
+            st.table(pd.DataFrame(list(metrics.items()), columns=["Process", "Time"]))
+
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.image(Image.fromarray(img_rgb), caption="Original Image", use_container_width=True)
+            st.image(adjusted_img, caption="Adjusted Input Image", use_container_width=True)
             st.image(Image.fromarray(processed_img if len(processed_img.shape) == 2 else cv2.cvtColor(processed_img, cv2.COLOR_GRAY2RGB)), 
                      caption="Preprocessed Image", use_container_width=True)
         

@@ -1,4 +1,3 @@
 [server]
-fileWatcherType = 'none'
-enableCORS = false
-
+enableCORS = true
+enableXsrfProtection = true
