@@ -29,7 +29,7 @@ from ultralytics import YOLO
 import pandas as pd
 
 # Set page configuration as the first Streamlit command
-st.set_page_config(page_title="DetecAI-Smart Object & Edge Detection App", layout="wide")
+st.set_page_config(page_title="Objectify-Smart Object & Edge Detection App", layout="wide")
 
 # ======================
 # CONFIGURATION
@@ -217,7 +217,7 @@ def generate_heatmap(edges: np.ndarray) -> np.ndarray:
 # STREAMLIT UI
 # ======================
 def main():
-    st.title("DectecAI-Smart object and edge detection application")
+    st.title("Objectify-Smart object and edge detection application")
     
     # High Contrast Mode Toggle
     high_contrast = st.sidebar.checkbox("High Contrast Mode", value=False)
