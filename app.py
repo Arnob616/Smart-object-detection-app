@@ -28,10 +28,8 @@ from PIL import Image
 from ultralytics import YOLO
 import pandas as pd
 
-# Rest of your code...
-
 # Set page configuration as the first Streamlit command
-st.set_page_config(page_title="Objectify-Smart Object & Edge Detection App", layout="wide")
+st.set_page_config(page_title="DetecAI-Smart Object & Edge Detection App", layout="wide")
 
 # ======================
 # CONFIGURATION
@@ -143,17 +141,17 @@ def apply_preprocessing(image: np.ndarray, params: dict) -> np.ndarray:
     """Apply preprocessing steps to the image"""
     try:
         processed = image.copy()
-        if params['gaussian']:
-            processed = cv2.GaussianBlur(processed, 
-                                        (params['gaussian_kernel'], params['gaussian_kernel']), 0)
-        if params['threshold']:
-            processed = cv2.adaptiveThreshold(processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                             cv2.THRESH_BINARY, 11, 2)
-        if params['hist_eq']:
+        if params['gaussian']: #gaussian blur
+            processed = cv2.GaussianBlur(processed,(params['gaussian_kernel'], 
+                                                    params['gaussian_kernel']), 0)
+        if params['threshold']: #Adaptive threshold
+            processed = cv2.adaptiveThreshold(processed, 255, cv2.
+                            ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY, 11, 2)
+        if params['hist_eq']:  #Histogram Equalization
             processed = cv2.equalizeHist(processed)
         if params['morph']:
-            kernel = np.ones((params['morph_kernel'], params['morph_kernel']), np.uint8)
-            processed = cv2.dilate(processed, kernel, iterations=1)
+            kernel = np.ones((params['morph_kernel'],params['morph_kernel']), np.uint8)
+            processed = cv2.dilate(processed, kernel,iterations=1)
         return processed
     except Exception as e:
         raise RuntimeError(f"Preprocessing failed: {str(e)}")
@@ -161,7 +159,7 @@ def apply_preprocessing(image: np.ndarray, params: dict) -> np.ndarray:
 def apply_edge_detection(method: str, image: np.ndarray, params: dict) -> np.ndarray:
     """Apply selected edge detection algorithm"""
     try:
-        if method == "Canny":
+        if method == "Canny": 
             return cv2.Canny(image, params['threshold1'], params['threshold2'])
         elif method == "Sobel":
             sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=params['kernel_size'])
@@ -186,30 +184,24 @@ def detect_objects(model, image: np.ndarray, selected_classes: list) -> tuple:
         detections = []
         counts = {}
         viz_image = image.copy()
-        
         for result in results:
             for box in result.boxes:
                 cls_id = int(box.cls[0])
                 class_name = model.names[cls_id]
-                
                 if selected_classes and class_name not in selected_classes:
                     continue
-                    
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 conf = float(box.conf[0])
-                
                 # Draw bounding boxes
                 cv2.rectangle(viz_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
                 cv2.putText(viz_image, f"{class_name} {conf:.2f}", 
                            (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-                
                 detections.append({
                     "class": class_name,
                     "confidence": conf,
                     "bbox": [x1, y1, x2, y2]
                 })
                 counts[class_name] = counts.get(class_name, 0) + 1
-                
         return viz_image, detections, counts, time.time()-start_time
     except Exception as e:
         raise RuntimeError(f"Object detection failed: {str(e)}")
@@ -225,7 +217,7 @@ def generate_heatmap(edges: np.ndarray) -> np.ndarray:
 # STREAMLIT UI
 # ======================
 def main():
-    st.title("Objectify-Smart object and edge detection application")
+    st.title("DectecAI-Smart object and edge detection application")
     
     # High Contrast Mode Toggle
     high_contrast = st.sidebar.checkbox("High Contrast Mode", value=False)
@@ -419,7 +411,7 @@ def main():
                 )
 
     st.markdown("---")
-    st.markdown("*Built by Arnob Bokshi using Streamlit, OpenCV, and YOLOv8*")
+    st.markdown("*Built by Arnob Bokshi*")
 
 if __name__ == "__main__":
     main()
