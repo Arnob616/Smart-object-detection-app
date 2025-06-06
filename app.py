@@ -7,26 +7,54 @@ import asyncio
 import nest_asyncio
 nest_asyncio.apply()
 
-# Torch path workaround BEFORE torch import
-import torch
+# Import system packages first
+import sys
+import warnings
+
+# Suppress warnings early
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# Try to import OpenCV with better error handling
 try:
+    import cv2
+except ImportError as e:
+    import subprocess
+    import sys
+    
+    # Try to install opencv-python-headless if not available
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "opencv-python-headless==4.8.0.76"])
+        import cv2
+    except Exception:
+        raise ImportError(f"OpenCV installation failed. Error: {e}")
+
+# Torch path workaround BEFORE torch import
+try:
+    import torch
     # Prevent Streamlit from inspecting torch.classes
-    torch.classes.__path__._path = []  # type: ignore 
-except AttributeError:
+    if hasattr(torch, 'classes') and hasattr(torch.classes, '__path__'):
+        torch.classes.__path__._path = []  # type: ignore 
+except (ImportError, AttributeError):
     pass
 
 # Now import other packages
 import streamlit as st
-import cv2
 import numpy as np
 import json
 import io
 import shutil
-import warnings
 import time
 from PIL import Image
-from ultralytics import YOLO
 import pandas as pd
+
+# Try to import YOLO with fallback
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+except ImportError:
+    YOLO_AVAILABLE = False
+    st.error("YOLO model not available. Object detection features will be disabled.")
 
 # Set page configuration as the first Streamlit command
 st.set_page_config(page_title="Objectify-Smart Object & Edge Detection App", layout="wide")
@@ -37,11 +65,8 @@ st.set_page_config(page_title="Objectify-Smart Object & Edge Detection App", lay
 MODEL_PATH = "yolov8n.pt"
 CACHE_DIR = os.path.expanduser("~/.cache/ultralytics")
 MAX_IMAGE_SIZE = 800
-EDGE_METHODS = ["Canny", "Sobel", "Laplacian"]  # Removed Scharr
+EDGE_METHODS = ["Canny", "Sobel", "Laplacian"]
 DEFAULT_CLASSES_TO_SHOW = 3
-
-# Suppress warnings
-warnings.filterwarnings("ignore", category=UserWarning)
 
 # ======================
 # CUSTOM CSS
@@ -90,30 +115,42 @@ def apply_theme(high_contrast):
 @st.cache_resource
 def load_yolo_model():
     """Load YOLOv8 model with cache management and error handling"""
+    if not YOLO_AVAILABLE:
+        return None
+        
     try:
+        # Clear cache if it exists
         if os.path.exists(CACHE_DIR):
-            shutil.rmtree(CACHE_DIR)
-            st.info("Cleared Ultralytics cache for fresh yolov8n.pt download.")
+            try:
+                shutil.rmtree(CACHE_DIR)
+                st.info("Cleared Ultralytics cache for fresh yolov8n.pt download.")
+            except Exception:
+                pass  # Ignore cache cleanup errors
             
         if not os.path.exists(MODEL_PATH):
             st.info("Downloading yolov8n.pt... This may take a moment.")
             
         return YOLO(MODEL_PATH)
     except Exception as e:
-        raise RuntimeError(f"Model loading failed: {str(e)}. Ensure internet connection and update ultralytics/torch.")
+        st.error(f"Model loading failed: {str(e)}. Object detection will be disabled.")
+        return None
 
 def adjust_image_properties(image, brightness=100, contrast=100, saturation=100):
     """Adjust image brightness, contrast, and saturation"""
-    img = np.array(image)
-    if brightness != 100:
-        img = cv2.convertScaleAbs(img, alpha=brightness/100)
-    if contrast != 100:
-        img = cv2.convertScaleAbs(img, alpha=contrast/100, beta=0)
-    if saturation != 100 and len(img.shape) == 3:
-        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-        hsv[..., 1] = np.clip(hsv[..., 1] * (saturation/100), 0, 255)
-        img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-    return Image.fromarray(img)
+    try:
+        img = np.array(image)
+        if brightness != 100:
+            img = cv2.convertScaleAbs(img, alpha=brightness/100)
+        if contrast != 100:
+            img = cv2.convertScaleAbs(img, alpha=contrast/100, beta=0)
+        if saturation != 100 and len(img.shape) == 3:
+            hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+            hsv[..., 1] = np.clip(hsv[..., 1] * (saturation/100), 0, 255)
+            img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+        return Image.fromarray(img)
+    except Exception as e:
+        st.error(f"Image adjustment failed: {str(e)}")
+        return image
 
 def preprocess_image(image: Image.Image) -> tuple:
     """Process uploaded image and return grayscale and RGB versions"""
@@ -141,17 +178,17 @@ def apply_preprocessing(image: np.ndarray, params: dict) -> np.ndarray:
     """Apply preprocessing steps to the image"""
     try:
         processed = image.copy()
-        if params['gaussian']: #gaussian blur
-            processed = cv2.GaussianBlur(processed,(params['gaussian_kernel'], 
-                                                    params['gaussian_kernel']), 0)
-        if params['threshold']: #Adaptive threshold
-            processed = cv2.adaptiveThreshold(processed, 255, cv2.
-                            ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY, 11, 2)
-        if params['hist_eq']:  #Histogram Equalization
+        if params.get('gaussian', False):
+            kernel_size = params.get('gaussian_kernel', 5)
+            processed = cv2.GaussianBlur(processed, (kernel_size, kernel_size), 0)
+        if params.get('threshold', False):
+            processed = cv2.adaptiveThreshold(processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        if params.get('hist_eq', False):
             processed = cv2.equalizeHist(processed)
-        if params['morph']:
-            kernel = np.ones((params['morph_kernel'],params['morph_kernel']), np.uint8)
-            processed = cv2.dilate(processed, kernel,iterations=1)
+        if params.get('morph', False):
+            kernel_size = params.get('morph_kernel', 3)
+            kernel = np.ones((kernel_size, kernel_size), np.uint8)
+            processed = cv2.dilate(processed, kernel, iterations=1)
         return processed
     except Exception as e:
         raise RuntimeError(f"Preprocessing failed: {str(e)}")
@@ -160,58 +197,71 @@ def apply_edge_detection(method: str, image: np.ndarray, params: dict) -> np.nda
     """Apply selected edge detection algorithm"""
     try:
         if method == "Canny": 
-            return cv2.Canny(image, params['threshold1'], params['threshold2'])
+            threshold1 = params.get('threshold1', 100)
+            threshold2 = params.get('threshold2', 200)
+            return cv2.Canny(image, threshold1, threshold2)
         elif method == "Sobel":
-            sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=params['kernel_size'])
-            sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=params['kernel_size'])
+            kernel_size = params.get('kernel_size', 3)
+            sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=kernel_size)
+            sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=kernel_size)
             edges = cv2.magnitude(sobelx, sobely)
         elif method == "Laplacian":
-            edges = cv2.Laplacian(image, cv2.CV_64F, ksize=params['laplacian_kernel'])
-        elif method == "Scharr":
-            scharrx = cv2.Scharr(image, cv2.CV_64F, 1, 0)
-            scharry = cv2.Scharr(image, cv2.CV_64F, 0, 1)
-            edges = cv2.magnitude(scharrx, scharry)
+            kernel_size = params.get('laplacian_kernel', 3)
+            edges = cv2.Laplacian(image, cv2.CV_64F, ksize=kernel_size)
+        else:
+            # Fallback to Canny if method not recognized
+            return cv2.Canny(image, 100, 200)
             
         return cv2.normalize(edges, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     except Exception as e:
-        raise RuntimeError(f"Edge detection failed: {str(e)}")
+        st.error(f"Edge detection failed: {str(e)}")
+        # Return original image as fallback
+        return image
 
 def detect_objects(model, image: np.ndarray, selected_classes: list) -> tuple:
     """Run YOLO object detection and return results with visualization"""
+    if model is None:
+        return image, [], {}, 0
+        
     try:
         start_time = time.time()
         results = model(image)
         detections = []
         counts = {}
         viz_image = image.copy()
+        
         for result in results:
-            for box in result.boxes:
-                cls_id = int(box.cls[0])
-                class_name = model.names[cls_id]
-                if selected_classes and class_name not in selected_classes:
-                    continue
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                conf = float(box.conf[0])
-                # Draw bounding boxes
-                cv2.rectangle(viz_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                cv2.putText(viz_image, f"{class_name} {conf:.2f}", 
-                           (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-                detections.append({
-                    "class": class_name,
-                    "confidence": conf,
-                    "bbox": [x1, y1, x2, y2]
-                })
-                counts[class_name] = counts.get(class_name, 0) + 1
-        return viz_image, detections, counts, time.time()-start_time
+            if hasattr(result, 'boxes') and result.boxes is not None:
+                for box in result.boxes:
+                    cls_id = int(box.cls[0])
+                    class_name = model.names[cls_id]
+                    if selected_classes and class_name not in selected_classes:
+                        continue
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    conf = float(box.conf[0])
+                    # Draw bounding boxes
+                    cv2.rectangle(viz_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    cv2.putText(viz_image, f"{class_name} {conf:.2f}", 
+                               (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                    detections.append({
+                        "class": class_name,
+                        "confidence": conf,
+                        "bbox": [x1, y1, x2, y2]
+                    })
+                    counts[class_name] = counts.get(class_name, 0) + 1
+        return viz_image, detections, counts, time.time() - start_time
     except Exception as e:
-        raise RuntimeError(f"Object detection failed: {str(e)}")
+        st.error(f"Object detection failed: {str(e)}")
+        return image, [], {}, 0
 
 def generate_heatmap(edges: np.ndarray) -> np.ndarray:
     """Generate edge intensity heatmap"""
     try:
         return cv2.applyColorMap(edges, cv2.COLORMAP_JET)
     except Exception as e:
-        raise RuntimeError(f"Heatmap generation failed: {str(e)}")
+        st.error(f"Heatmap generation failed: {str(e)}")
+        # Return a simple colorized version as fallback
+        return cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
 
 # ======================
 # STREAMLIT UI
@@ -224,16 +274,12 @@ def main():
     apply_theme(high_contrast)
     
     # Model loading with error handling
-    try:
-        model = load_yolo_model()
-    except Exception as e:
-        st.error(f"""Model Error: {str(e)}
-                    Try these steps:
-                    1. Update dependencies: `pip install --upgrade ultralytics torch`
-                    2. Ensure internet connection for downloading yolov8n.pt
-                    3. Verify PyTorch version: `pip show torch`
-                    4. Manually download yolov8n.pt from https://github.com/ultralytics/assets/releases and place it in the project directory""")
-        st.stop()
+    model = None
+    if YOLO_AVAILABLE:
+        try:
+            model = load_yolo_model()
+        except Exception as e:
+            st.warning(f"YOLO model could not be loaded: {str(e)}. Edge detection will still work.")
 
     # Input Selection
     input_method = st.sidebar.radio("Input Method", ["File Upload", "Webcam Capture"])
@@ -246,11 +292,17 @@ def main():
         if input_method == "File Upload":
             uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"], key="uploader")
             if uploaded_file:
-                img = Image.open(uploaded_file)
+                try:
+                    img = Image.open(uploaded_file)
+                except Exception as e:
+                    st.error(f"Failed to load image: {str(e)}")
         else:
             webcam_img = st.camera_input("Take a picture...")
             if webcam_img:
-                img = Image.open(webcam_img)
+                try:
+                    img = Image.open(webcam_img)
+                except Exception as e:
+                    st.error(f"Failed to load webcam image: {str(e)}")
 
         if not img:
             st.markdown("*Built by Arnob Bokshi. Upload an image or use webcam to begin processing.*")
@@ -302,9 +354,16 @@ def main():
 
         # Object detection options
         with st.expander("Object Detection Settings", expanded=True):
-            yolo_enabled = st.checkbox("Enable YOLO Detection", True, key="yolo_enabled")
+            yolo_enabled = st.checkbox("Enable YOLO Detection", model is not None, key="yolo_enabled", disabled=model is None)
             draw_contours = st.checkbox("Draw Edge Contours", True, key="draw_contours")
-            class_options = list(model.names.values()) if yolo_enabled else []
+            
+            class_options = []
+            if model and yolo_enabled:
+                try:
+                    class_options = list(model.names.values())
+                except Exception:
+                    class_options = []
+                    
             selected_classes = st.multiselect("Filter Classes", 
                                              class_options, 
                                              default=class_options[:DEFAULT_CLASSES_TO_SHOW] if class_options else [],
@@ -326,15 +385,18 @@ def main():
         
         contour_img = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
         if draw_contours:
-            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(contour_img, contours, -1, (0, 255, 0), 2)
+            try:
+                contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(contour_img, contours, -1, (0, 255, 0), 2)
+            except Exception:
+                pass  # Skip contour drawing if it fails
 
         # Object detection
         yolo_image = img_rgb.copy()
         detections = []
         counts = {}
         yolo_time = 0
-        if yolo_enabled:
+        if yolo_enabled and model:
             yolo_image, detections, counts, yolo_time = detect_objects(model, img_rgb, selected_classes)
 
         # Generate heatmap
@@ -371,7 +433,7 @@ def main():
         
         with col2:
             st.image(Image.fromarray(contour_img), caption=f"{edge_method} Edges with Contours", use_container_width=True)
-            if yolo_enabled:
+            if yolo_enabled and model:
                 st.image(Image.fromarray(yolo_image), caption="YOLO Object Detection", use_container_width=True)
             st.image(Image.fromarray(heatmap), caption="Edge Intensity Heatmap", use_container_width=True)
 
@@ -388,7 +450,7 @@ def main():
         # Download options
         with st.expander("Download Options", expanded=False):
             buf = io.BytesIO()
-            if yolo_enabled:
+            if yolo_enabled and model:
                 Image.fromarray(yolo_image).save(buf, format="PNG")
             else:
                 Image.fromarray(contour_img).save(buf, format="PNG")
