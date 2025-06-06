@@ -6,3 +6,4 @@ ultralytics>=8.0.0
 pandas>=2.0.3
 nest-asyncio>=1.5.7
 torch>=2.0.1
+torchvision>=0.15.2
